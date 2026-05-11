@@ -5,7 +5,6 @@ from bs4 import BeautifulSoup
 
 app = FastAPI()
 
-# Frontend saytimiz API ga ulanishi uchun ruxsat beramiz
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,112 +15,71 @@ app.add_middleware(
 
 @app.get("/get_video")
 def get_video_link(url: str):
-    # 1. Agar to'g'ridan-to'g'ri MP4 berilsa
     if url.lower().endswith(".mp4"):
-        return {
-            "so'ralgan_link": url,
-            "topilgan_video": {"Asosiy": url},
-            "holat": "Bu tayyor MP4 fayl ekan! 🍿"
-        }
-
+        return {"so'ralgan_link": url, "topilgan_videolar": {"Asosiy": url}, "holat": "MP4 fayl"}
     try:
-        # 2. Saytga kirib HTML'ni o'qish
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Saytga kirib bo'lmadi")
-
+        if response.status_code != 200: raise HTTPException(status_code=400, detail="Saytga kirib bo'lmadi")
         soup = BeautifulSoup(response.text, "html.parser")
         video_links = {}
 
-        # 3. Asilmedia siri: `fs-player__tab` klassiga ega tugmalarni qidirish
         buttons = soup.find_all("button", class_="fs-player__tab")
-        
         for btn in buttons:
-            sifat = btn.get("data-name") # 480p, 720p degan yozuvni olamiz
-            link = btn.get("data-url")   # mp4 ssilkani olamiz
-            if sifat and link:
-                video_links[sifat] = link
-
-        # 4. Agar tugmalar ichidan topilsa, natijani qaytarish
-        if video_links:
-            return {
-                "so'ralgan_link": url,
-                "topilgan_videolar": video_links,
-                "holat": "Muvaffaqiyatli! Barcha sifatdagi videolar topildi 🎬"
-            }
+            sifat, link = btn.get("data-name"), btn.get("data-url")
+            if sifat and link: video_links[sifat] = link
+            
+        if video_links: return {"so'ralgan_link": url, "topilgan_videolar": video_links, "holat": "Muvaffaqiyatli!"}
         
-        # 5. Ehtiyot shart: Agar bu Asilmedia bo'lmasa, oddiy <video> larni qidirib ko'ramiz
         video_tag = soup.find("video")
-        if video_tag and video_tag.get("src"):
-            return {"topilgan_videolar": {"Standart": video_tag.get("src")}, "holat": "Oddiy video topildi"}
-
+        if video_tag and video_tag.get("src"): return {"topilgan_videolar": {"Standart": video_tag.get("src")}, "holat": "Oddiy video"}
+        
         iframe_tag = soup.find("iframe")
-        if iframe_tag and iframe_tag.get("src"):
-            return {"topilgan_videolar": {"Iframe": iframe_tag.get("src")}, "holat": "Iframe pleyer topildi"}
-
-        return {"xato": "Bu sahifadan aniq video link topilmadi."}
-
+        if iframe_tag and iframe_tag.get("src"): return {"topilgan_videolar": {"Iframe": iframe_tag.get("src")}, "holat": "Iframe"}
+        
+        return {"xato": "Video link topilmadi."}
     except Exception as e:
-        return {"xato": f"Kutilmagan xatolik: {str(e)}"}
-    
+        return {"xato": str(e)}
 
-@app.get("/search")
-def search_movie(query: str):
+@app.get("/movies")
+def get_movies(query: str = "tarjima", type: str = "search"):
     try:
-        url = f"https://asilmedia.org/index.php?do=search&subaction=search&story={query}"
+        # Janrlar lug'ati (saytdagi ruscha URL larga to'g'rilash uchun)
+        janrlar = {"jangari": "боевик", "komediya": "комедия", "qorqinchli": "ужасы", "fantastika": "фантастика", "drama": "драма", "sarguzasht": "приключения"}
+        
+        if type == "genre":
+            q = janrlar.get(query.lower(), query)
+            url = f"https://asilmedia.org/xfsearch/genre/{q}/"
+        elif type == "year":
+            url = f"https://asilmedia.org/xfsearch/year/{query}/"
+        else:
+            url = f"https://asilmedia.org/index.php?do=search&subaction=search&story={query}"
+
         headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers)
+        if response.status_code != 200: raise HTTPException(status_code=400, detail="Ulanib bo'lmadi")
         
-        if response.status_code != 200:
-            raise HTTPException(status_code=400, detail="Qidiruv tizimiga ulanib bo'lmadi")
-
         soup = BeautifulSoup(response.text, "html.parser")
         natijalar = []
-
-        # 1. Kinolar qutichasini qidiramiz
         cards = soup.find_all(['article', 'div'], class_=lambda c: c and ('card' in c or 'short' in c))
         
         for card in cards:
             link_tag = card.find('a')
-            if not link_tag or not link_tag.get('href') or '.html' not in link_tag.get('href'):
-                continue
-            
+            if not link_tag or not link_tag.get('href') or '.html' not in link_tag.get('href'): continue
             kino_linki = link_tag.get('href')
-            
             title_tag = card.find(['h2', 'h3'])
             kino_nomi = title_tag.text.strip() if title_tag else ""
-            
             img_tag = card.find('img')
-            rasm_linki = "Rasm topilmadi"
-            if img_tag:
-                rasm_linki = img_tag.get('src') or img_tag.get('data-src') or "Rasm topilmadi"
-                if rasm_linki.startswith("/"):
-                    rasm_linki = "https://asilmedia.org" + rasm_linki
-                if not kino_nomi and img_tag.get('alt'):
-                    kino_nomi = img_tag.get('alt')
-
+            rasm_linki = img_tag.get('src') or img_tag.get('data-src') if img_tag else "Rasm topilmadi"
+            if rasm_linki.startswith("/"): rasm_linki = "https://asilmedia.org" + rasm_linki
+            if not kino_nomi and img_tag and img_tag.get('alt'): kino_nomi = img_tag.get('alt')
             meta_tag = card.find('div', class_=lambda c: c and 'meta' in c)
-            qoshimcha = meta_tag.text.strip() if meta_tag else "Ma'lumot yo'q"
-
+            qoshimcha = meta_tag.text.strip() if meta_tag else "Kino haqida ma'lumot"
+            
             if kino_nomi and kino_linki:
-                natijalar.append({
-                    "nomi": kino_nomi,
-                    "rasmi": rasm_linki,
-                    "qoshimcha": qoshimcha,
-                    "linki": kino_linki
-                })
+                natijalar.append({"nomi": kino_nomi, "rasmi": rasm_linki, "qoshimcha": qoshimcha, "linki": kino_linki})
 
-        if natijalar:
-            return {
-                "qidiruv_sozi": query,
-                "topilgan_kinolar_soni": len(natijalar),
-                "kinolar": natijalar,
-                "holat": "Muvaffaqiyatli topildi! 🔎"
-            }
-        else:
-            return {"xato": f"'{query}' bo'yicha hech qanday kino topilmadi."}
-
+        if natijalar: return {"kinolar": natijalar, "holat": "Topildi!"}
+        else: return {"xato": "Hech narsa topilmadi."}
     except Exception as e:
-        return {"xato": f"Kutilmagan xatolik yuz berdi: {str(e)}"}
+        return {"xato": str(e)}
